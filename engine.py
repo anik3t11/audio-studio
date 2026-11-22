@@ -151,3 +151,33 @@ def peaks(path, n=1200):
     if a.ndim > 1: a = a.mean(1)
     step = max(1, len(a) // n); a = a[: step * n].reshape(-1, step) if len(a) >= n else a.reshape(1, -1)
     m = np.abs(a).max(1); return (m / (m.max() + 1e-9)).round(3).tolist()
+
+def analyze(path):
+    """Listen to the file and suggest slider values, with plain-language notes. Leaves space, music and loudness to the user."""
+    a, _ = sf.read(str(extract(path)), dtype="float32")
+    if a.ndim > 1: a = a.mean(1)
+    fr = SR // 50; n = len(a) // fr
+    if n < 20: return {}, ["The recording is too short to analyse."]
+    frames = a[: n * fr].reshape(n, fr); e = 20 * np.log10(np.sqrt((frames ** 2).mean(1)) + 1e-9)
+    speech_db = np.percentile(e, 95); snr = speech_db - np.percentile(e, 3)      # calibrated on clean studio voice (~52), laptop mic (~35), fan noise (~26)
+    notes, s = [], {}
+    if snr > 48:   s["noise"] = 25; notes.append("Very quiet background")
+    elif snr > 38: s["noise"] = 45; notes.append("A little background noise")
+    elif snr > 28: s["noise"] = 65; notes.append("Noticeable background noise")
+    else:          s["noise"] = 90; notes.append("Heavy background noise")
+    speech = frames[e > np.percentile(e, 70)].ravel()                       # tone, measured on the speech only
+    F = np.abs(np.fft.rfft(speech[: SR * 30])) ** 2; f = np.fft.rfftfreq(min(len(speech), SR * 30), 1 / SR)
+    band = lambda lo, hi: 10 * np.log10(F[(f >= lo) & (f < hi)].sum() + 1e-9)
+    boom, bright = band(80, 250) - band(250, 1000), band(2000, 5000) - band(250, 1000)   # a good voice ≈ −3 and −12
+    s["warmth"] = int(np.clip(50 - (boom + 3) * 3, 30, 75))
+    notes.append("Boomy voice, so a bit lighter" if s["warmth"] < 43 else "Thin voice, so warmer" if s["warmth"] > 57 else "Balanced low end")
+    s["clarity"] = int(np.clip(50 - (bright + 12) * 2.5, 30, 80))
+    notes.append("Muffled, so clarity added" if s["clarity"] > 58 else "Already bright, so clarity kept gentle" if s["clarity"] < 42 else "Clear enough")
+    drops = [e[i] - e[i + 1:i + 8].min() for i in range(2, n - 8) if e[i - 1] > speech_db - 8 and e[i] < speech_db - 14]
+    echoey = len(drops) >= 15 and np.median(drops) < 4 and snr > 38                  # sound lingers after words, and it isn't just noise
+    s["echo"] = 55 if echoey else 25
+    notes.append("Echoey room" if echoey else "Little room echo")
+    spread = np.std(e[e > np.percentile(e, 60)])                           # loud vs soft words
+    s["punch"] = int(np.clip(35 + spread * 6, 30, 75))
+    notes.append("Uneven loudness, so evened out" if s["punch"] > 55 else "Steady loudness")
+    return s, notes

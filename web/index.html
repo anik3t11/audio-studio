@@ -77,6 +77,8 @@ footer{position:fixed;left:0;right:0;bottom:0;background:rgba(15,17,21,.96);bord
     </div>
     <div class="card" id="presetCard">
       <h2>2 · Start from a preset</h2>
+      <div class="row" style="margin-bottom:12px"><button class="primary" id="autoBtn" disabled>✨ Auto: listen and set everything</button><span class="hint" id="autoNote">Best first step for any new recording.</span></div>
+      <div class="chips" id="autoTags" style="margin-bottom:12px"></div>
       <div class="chips" id="presets"></div>
       <div class="chips" id="mine" style="margin-top:10px"></div>
     </div>
@@ -142,7 +144,7 @@ function slider(host, key, label, what, min=0, max=100, step=1, val=50, onchange
   host.appendChild(d); return d;
 }
 const ctl = {};
-function changed(k, v){ p[k] = v; markPreset(null); schedule(); }
+function changed(k, v){ p[k] = v; markPreset(null); live(); schedule(700); }
 SL.forEach(([k,l,w]) => ctl[k] = slider($("sliders"), k, l, w, 0, 100, 1, 50, changed));
 ctl.music_level = slider($("mlev"), "music_level", "Music volume", "", 0, 100, 1, 40, changed);
 ctl.duck = slider($("mduck"), "duck", "Lower music when I speak", "Music dips under your voice and returns in pauses.", 0, 100, 1, 60, changed);
@@ -207,7 +209,7 @@ function loaded(info){
   $("drop").style.display = "none"; $("fileinfo").style.display = "block"; $("wavewrap").style.display = "block";
   $("fname").textContent = info.name;
   $("fmeta").textContent = `${fmt(info.duration)} · ${info.video ? "video (picture is kept as it is)" : "audio"}`;
-  drawWave(); $("exportBtn").disabled = false; $("play").disabled = false; schedule(0);
+  drawWave(); $("exportBtn").disabled = false; $("play").disabled = false; $("autoBtn").disabled = false; $("autoTags").innerHTML = ""; $("autoNote").textContent = "Best first step for any new recording."; schedule(0);
 }
 async function openDialog(){ status("Waiting for you to pick a file…", false, true); const r = await fetch("/api/open",{method:"POST"}); if (!r.ok) return status((await r.json()).detail || "Couldn't open that file.", true); const j = await r.json(); if (j.cancelled) return status(file ? "Ready." : "Choose a file to begin."); loaded(j); }
 $("openBtn").onclick = $("changeBtn").onclick = openDialog;
@@ -220,6 +222,37 @@ document.addEventListener("drop", async ev => {
   const r = await fetch("/api/upload", {method:"POST", body: fd}); if (!r.ok) return status((await r.json()).detail || "Couldn't read that file.", true);
   loaded(await r.json());
 });
+// ---- auto ----
+$("autoBtn").onclick = async () => {
+  if (!file) return; $("autoBtn").disabled = true; status("Listening to your recording…", false, true);
+  const r = await fetch("/api/auto?path=" + encodeURIComponent(file.path)); $("autoBtn").disabled = false;
+  if (!r.ok) return status("Auto couldn't analyse this file.", true);
+  const j = await r.json(); apply(j.values); markPreset(null);
+  $("autoTags").innerHTML = j.notes.map(n => `<span class="chip" style="cursor:default;background:#1d2a28;border-color:#2c4a45;color:#bfe7e1">${n}</span>`).join("");
+  $("autoNote").textContent = "Set from your recording. Adjust anything you like.";
+};
+
+// ---- instant tone preview: Web Audio filters bridge the gap until the real render arrives ----
+let AC = null, nodes = null, rendered = null;
+function audioGraph(){
+  if (AC) return; AC = new AudioContext();
+  const src = AC.createMediaElementSource($("aAfter")), mk = (type, f, q) => { const b = AC.createBiquadFilter(); b.type = type; b.frequency.value = f; if (q) b.Q.value = q; b.gain.value = 0; return b; };
+  nodes = {low: mk("lowshelf", 200), chest: mk("peaking", 120, 1), tilt: mk("highshelf", 6000), pres: mk("peaking", 3200, 0.9), air: mk("highshelf", 9000)};
+  const conv = AC.createConvolver(), n = AC.sampleRate * 1.6, ir = AC.createBuffer(2, n, AC.sampleRate);
+  for (let c = 0; c < 2; c++){ const d = ir.getChannelData(c); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-6.9 * i / n); }
+  conv.buffer = ir; nodes.wet = AC.createGain(); nodes.wet.gain.value = 0;
+  src.connect(nodes.low).connect(nodes.chest).connect(nodes.tilt).connect(nodes.pres).connect(nodes.air);
+  nodes.air.connect(AC.destination); nodes.air.connect(conv).connect(nodes.wet).connect(AC.destination);
+}
+function live(){
+  if (!nodes || !rendered) return;
+  const dw = ((p.warmth ?? 50) - (rendered.warmth ?? 50)) / 50, dc = ((p.clarity ?? 50) - (rendered.clarity ?? 50)) / 100, ds = Math.max(0, (p.space ?? 0) - (rendered.space ?? 0)) / 100;
+  const t = AC.currentTime;
+  nodes.low.gain.setTargetAtTime(dw * 9, t, .03); nodes.chest.gain.setTargetAtTime(dw * 3, t, .03); nodes.tilt.gain.setTargetAtTime(-dw * 3, t, .03);
+  nodes.pres.gain.setTargetAtTime(dc * 15, t, .03); nodes.air.gain.setTargetAtTime(dc * 8, t, .03); nodes.wet.gain.setTargetAtTime(ds * 0.35, t, .03);
+}
+function flat(){ if (!nodes) return; for (const k of ["low","chest","tilt","pres","air"]) nodes[k].gain.value = 0; nodes.wet.gain.value = 0; }
+
 // ---- record from mic ----
 let rec = null, recChunks = [], recStream = null, recStart = 0, recTick = null, recKeep = true;
 document.querySelectorAll(".recBtn").forEach(b => b.onclick = startRec);
@@ -273,20 +306,20 @@ addEventListener("resize", () => file && drawWave());
 function schedule(ms = 450){ if (!file) return; clearTimeout(timer); timer = setTimeout(previewNow, ms); }
 let seq = 0;
 async function previewNow(){
-  const my = ++seq; const wasPlaying = !cur().paused; const pos = cur().currentTime;
+  const my = ++seq; const wasPlaying = !cur().paused; const pos = cur().currentTime; const sent = {...p};
   status("Updating preview…", false, true);
   const r = await fetch("/api/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path: file.path, params: params(), start, length: Math.min(20, file.duration)})});
   if (my !== seq) return;
   if (!r.ok){ const j = await r.json().catch(()=>({})); return status("Preview failed: " + (j.detail || r.status), true); }
   const j = await r.json(); stop();
-  $("aBefore").src = j.before; $("aAfter").src = j.after;
+  $("aBefore").src = j.before; $("aAfter").src = j.after; rendered = sent; flat(); live();
   status(`Ready · previewing ${fmt(start)}–${fmt(start + Math.min(20, file.duration))}. Press ▶, and switch Before / After while it plays.`);
   if (wasPlaying){ for (const a of [$("aBefore"), $("aAfter")]) a.currentTime = pos; play(); }
 }
 const cur = () => which === "after" ? $("aAfter") : $("aBefore");
 const other = () => which === "after" ? $("aBefore") : $("aAfter");
 let raf;
-function play(){ const a = cur(), o = other(); o.pause(); o.currentTime = a.currentTime; a.play(); $("play").textContent = "⏸"; cancelAnimationFrame(raf); const tick = () => { drawWave(); if (!a.paused) raf = requestAnimationFrame(tick); else $("play").textContent = "▶"; }; tick(); }
+function play(){ audioGraph(); if (AC.state === "suspended") AC.resume(); const a = cur(), o = other(); o.pause(); o.currentTime = a.currentTime; a.play(); $("play").textContent = "⏸"; cancelAnimationFrame(raf); const tick = () => { drawWave(); if (!a.paused) raf = requestAnimationFrame(tick); else $("play").textContent = "▶"; }; tick(); }
 function stop(){ $("aBefore").pause(); $("aAfter").pause(); $("play").textContent = "▶"; }
 $("play").onclick = () => { if (!cur().src) return; cur().paused ? play() : stop(); };
 function setWhich(w){ const playing = !cur().paused, t = cur().currentTime; which = w; $("bBefore").classList.toggle("on", w === "before"); $("bAfter").classList.toggle("on", w === "after"); other().pause(); cur().currentTime = t; if (playing) play(); }

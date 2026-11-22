@@ -67,6 +67,11 @@ def preview(j: Job):
             raise HTTPException(500, (e.stderr or b"").decode()[-400:])
     return {"before": f"/api/file/{before.name}", "after": f"/api/file/{after.name}"}
 
+@app.get("/api/auto")
+def auto(path: str):
+    with lock: vals, notes = engine.analyze(path)
+    return {"values": vals, "notes": notes}
+
 @app.get("/api/file/{name}")
 def file(name: str):
     p = engine.WORK / Path(name).name
