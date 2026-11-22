@@ -51,7 +51,7 @@ class Live:
         self.set_params(params or {})
         self.buf = np.zeros(CTX + BLK + LAG, np.float32); self.env = 0.0; self.gain = 1.0; self.gate = 1.0
         self.q_in = collections.deque(maxlen=20); self.q_out = collections.deque(maxlen=8); self.q_mon = collections.deque(maxlen=8)
-        self.err = None; self.running = True
+        self.err = None; self.running = True; self.last_in = time.time() + 2      # grace for the mic to open
         for q in (self.q_out, self.q_mon): q.append(np.zeros(BLK, np.float32))      # one block of cushion against jitter
         self.streams = [sd.InputStream(device=mic, samplerate=SR, channels=1, blocksize=BLK, dtype="float32", callback=self._in)]
         self.streams.append(sd.OutputStream(device=out, samplerate=SR, channels=2, blocksize=BLK, dtype="float32", callback=self._out(self.q_out)))
@@ -66,7 +66,7 @@ class Live:
             except Exception: pass
         self.streams = []; self.levels = (0.0, 0.0)
 
-    def _in(self, data, frames, t, status): self.q_in.append(data[:, 0].copy())
+    def _in(self, data, frames, t, status): self.last_in = time.time(); self.q_in.append(data[:, 0].copy())
 
     def _out(self, q):
         def cb(data, frames, t, status):

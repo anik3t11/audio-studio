@@ -5,3 +5,4 @@ library/My sounds/*
 my_presets.json
 test/
 __pycache__/
+menubar_settings.json
