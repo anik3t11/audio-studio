@@ -94,6 +94,18 @@ footer{position:fixed;left:0;right:0;bottom:0;background:rgba(15,17,21,.96);bord
     </div>
   </section>
   <aside style="display:flex;flex-direction:column;gap:18px">
+    <div class="card" id="liveCard">
+      <h2>🎧 Meeting mode (live)</h2>
+      <div id="noBH" class="hint" style="display:none;color:var(--text)">Needs the free <b>BlackHole 2ch</b> virtual mic. Finish its installer, then <a href="#" id="bhRefresh" style="color:var(--acc)">check again</a>.</div>
+      <div class="slider"><div class="top"><label>Your microphone</label></div><select id="lvMic"></select></div>
+      <div class="slider"><div class="top"><label>Hear yourself (optional)</label></div><div class="what">Use headphones only, or you'll hear an echo.</div><select id="lvMon"></select></div>
+      <div class="row" style="margin-top:12px"><button class="primary" id="lvBtn" style="flex:1">Start clean mic</button></div>
+      <div id="lvMeters" style="display:none;margin-top:12px">
+        <div class="hint">Mic in</div><div style="height:8px;background:var(--panel2);border-radius:4px"><div id="lvIn" style="height:8px;width:0;background:#4a5160;border-radius:4px"></div></div>
+        <div class="hint" style="margin-top:6px">Clean voice out</div><div style="height:8px;background:var(--panel2);border-radius:4px"><div id="lvOut" style="height:8px;width:0;background:var(--acc2);border-radius:4px"></div></div>
+      </div>
+      <p class="hint" id="lvHelp">In Zoom, Google Meet or Teams, choose <b>BlackHole 2ch</b> as the microphone. The sliders on the left change your live voice instantly. Tip: start with the "Meeting – clear voice" preset or ✨ Auto.</p>
+    </div>
     <div class="card" id="bgCard">
       <h2>4 · Background sound</h2>
       <div class="slider"><div class="top"><label>Music</label></div>
@@ -144,7 +156,7 @@ function slider(host, key, label, what, min=0, max=100, step=1, val=50, onchange
   host.appendChild(d); return d;
 }
 const ctl = {};
-function changed(k, v){ p[k] = v; markPreset(null); live(); schedule(700); }
+function changed(k, v){ p[k] = v; markPreset(null); live(); lvUpdate(); schedule(700); }
 SL.forEach(([k,l,w]) => ctl[k] = slider($("sliders"), k, l, w, 0, 100, 1, 50, changed));
 ctl.music_level = slider($("mlev"), "music_level", "Music volume", "", 0, 100, 1, 40, changed);
 ctl.duck = slider($("mduck"), "duck", "Lower music when I speak", "Music dips under your voice and returns in pauses.", 0, 100, 1, 60, changed);
@@ -165,7 +177,7 @@ function apply(preset){
   if ("ambience" in preset) $("amb").value = preset.ambience || "";
   p = {...p, ...preset}; delete p.music; delete p.ambience; delete p.advanced;
   if (preset.advanced){ $("advOn").checked = true; for (const k in preset.advanced) advCtl[k]?.set(preset.advanced[k]); } else $("advOn").checked = false;
-  syncMusic(); schedule();
+  syncMusic(); schedule(); if (typeof lvUpdate === 'function') lvUpdate();
 }
 function markPreset(name){ current = name; document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.name === name)); }
 function drawPresets(){
@@ -252,6 +264,41 @@ function live(){
   nodes.pres.gain.setTargetAtTime(dc * 15, t, .03); nodes.air.gain.setTargetAtTime(dc * 8, t, .03); nodes.wet.gain.setTargetAtTime(ds * 0.35, t, .03);
 }
 function flat(){ if (!nodes) return; for (const k of ["low","chest","tilt","pres","air"]) nodes[k].gain.value = 0; nodes.wet.gain.value = 0; }
+
+// ---- meeting mode ----
+let LV = {running:false, bh:null}, lvTimer = null;
+async function lvDevices(){
+  const j = await (await fetch("/api/live/devices")).json(); LV.bh = j.blackhole;
+  const ins = j.devices.filter(d => d.in && !/BlackHole|Teams Audio/.test(d.name)), outs = j.devices.filter(d => d.out && !/BlackHole|Teams Audio/.test(d.name));
+  $("lvMic").innerHTML = ins.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  const pref = ins.find(d => /MacBook|Built-in/.test(d.name)); if (pref) $("lvMic").value = pref.id;
+  $("lvMon").innerHTML = `<option value="">Don't play my voice back</option>` + outs.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  $("noBH").style.display = LV.bh === null ? "block" : "none"; $("lvBtn").disabled = LV.bh === null;
+  if (j.running) lvShow(true);
+}
+$("bhRefresh").onclick = e => { e.preventDefault(); lvDevices(); };
+function lvParams(){ const q = {...p}; delete q.loudness; return q; }
+function lvShow(on){
+  LV.running = on; $("lvBtn").textContent = on ? "■ Stop clean mic" : "Start clean mic"; $("lvBtn").classList.toggle("primary", !on);
+  $("lvMeters").style.display = on ? "block" : "none"; clearInterval(lvTimer);
+  if (on) lvTimer = setInterval(async () => {
+    const j = await (await fetch("/api/live/status")).json();
+    if (j.error){ lvShow(false); return status("Meeting mode stopped: " + j.error, true); }
+    if (!j.running){ lvShow(false); return; }
+    $("lvIn").style.width = Math.min(100, j.levels[0] * 140) + "%"; $("lvOut").style.width = Math.min(100, j.levels[1] * 110) + "%";
+  }, 120);
+}
+$("lvBtn").onclick = async () => {
+  if (LV.running){ await fetch("/api/live/stop", {method:"POST"}); lvShow(false); return status("Clean mic stopped."); }
+  status("Starting clean mic…", false, true);
+  const body = {mic: +$("lvMic").value, out: LV.bh, monitor: $("lvMon").value === "" ? null : +$("lvMon").value, params: lvParams()};
+  const r = await fetch("/api/live/start", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) return status((await r.json().catch(()=>({}))).detail || "Couldn't start the clean mic.", true);
+  lvShow(true); status("Clean mic is ON. Choose “BlackHole 2ch” as the microphone in your meeting app.");
+};
+let lvSend = null;
+function lvUpdate(){ if (!LV.running) return; clearTimeout(lvSend); lvSend = setTimeout(() => fetch("/api/live/params", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(lvParams())}), 120); }
+lvDevices();
 
 // ---- record from mic ----
 let rec = null, recChunks = [], recStream = null, recStart = 0, recTick = null, recKeep = true;

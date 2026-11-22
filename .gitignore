@@ -4,3 +4,4 @@ library/My sounds/*
 !library/My sounds/.keep
 my_presets.json
 test/
+__pycache__/

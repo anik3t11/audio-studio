@@ -42,15 +42,21 @@ def extract(path):
     return out
 
 _df = None
+def _df_model():
+    """DeepFilterNet loaded once and shared by editing and meeting mode."""
+    global _df
+    if _df is None:
+        from df.enhance import init_df
+        _df = init_df(log_level="ERROR")[:2]
+    return _df
+
 def denoise(src, amount):
     """DeepFilterNet with an attenuation limit from the slider: 0 = off, 100 = remove everything that isn't voice (cached)."""
-    global _df
     if amount <= 0: return src
     out = WORK / f"dn_{src.stem}_{amount}.wav"
     if out.exists(): return out
-    from df.enhance import enhance, init_df, load_audio, save_audio
-    if _df is None: _df = init_df(log_level="ERROR")[:2]
-    model, state = _df
+    from df.enhance import enhance, load_audio, save_audio
+    model, state = _df_model()
     audio, _ = load_audio(str(src), sr=state.sr())
     lim = 6 + amount * 0.54 if amount < 100 else None          # dB of noise reduction allowed: gentle → full
     save_audio(str(out), enhance(model, state, audio, atten_lim_db=lim), state.sr())

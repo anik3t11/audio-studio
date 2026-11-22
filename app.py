@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 import engine
+from live import Live
 
 ROOT = Path(__file__).parent
 LIB = ROOT / "library"
@@ -123,6 +124,35 @@ def save_preset(p: Preset):
 def delete_preset(name: str):
     mine = json.loads(MINE.read_text()) if MINE.exists() else {}
     mine.pop(name, None); MINE.write_text(json.dumps(mine, indent=1, ensure_ascii=False)); return mine
+
+live = Live()
+
+@app.get("/api/live/devices")
+def live_devices():
+    devs = live.devices()
+    bh = next((d["id"] for d in devs if "BlackHole" in d["name"] and d["out"]), None)
+    return {"devices": devs, "blackhole": bh, "running": live.running}
+
+class LiveStart(BaseModel):
+    mic: int
+    out: int
+    monitor: int | None = None
+    params: dict = {}
+
+@app.post("/api/live/start")
+def live_start(j: LiveStart):
+    try: live.start(j.mic, j.out, j.monitor, j.params)
+    except Exception as e: live.stop(); raise HTTPException(500, f"Couldn't start: {e}")
+    return {"running": True}
+
+@app.post("/api/live/stop")
+def live_stop(): live.stop(); return {"running": False}
+
+@app.post("/api/live/params")
+def live_params(p: dict): live.set_params(p); return {}
+
+@app.get("/api/live/status")
+def live_status(): return {"running": live.running, "levels": live.levels, "error": live.err}
 
 if __name__ == "__main__":
     threading.Timer(1.2, lambda: webbrowser.open("http://127.0.0.1:8765")).start()
