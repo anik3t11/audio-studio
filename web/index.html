@@ -61,9 +61,15 @@ footer{position:fixed;left:0;right:0;bottom:0;background:rgba(15,17,21,.96);bord
   <section style="display:flex;flex-direction:column;gap:18px">
     <div class="card">
       <h2>1 · Your file</h2>
-      <div id="drop"><b>Drop a video or audio file here</b><br>or <button id="openBtn" style="margin-top:10px">Choose file…</button></div>
+      <div id="drop"><b>Drop a video or audio file here</b><br>or <button id="openBtn" style="margin-top:10px">Choose file…</button> &nbsp;or&nbsp; <button class="recBtn" style="margin-top:10px">🎤 Record from mic</button></div>
+      <div id="recbox" style="display:none;text-align:center;padding:26px;border:2px solid var(--bad);border-radius:12px">
+        <div style="font-size:22px;font-weight:650"><span style="color:var(--bad)">●</span> Recording <span id="rectime">0:00</span></div>
+        <canvas id="meter" style="width:100%;max-width:420px;height:36px;margin:12px auto;display:block"></canvas>
+        <div class="hint" style="margin-bottom:12px">Speak normally, as you would in a meeting or a video. Keep the fan or AC on to test the noise removal.</div>
+        <button id="stopRec" class="primary">■ Stop and load</button> <button id="cancelRec">Cancel</button>
+      </div>
       <div id="fileinfo" style="display:none">
-        <div class="fileline"><span class="name" id="fname"></span><button id="changeBtn">Change file</button></div>
+        <div class="fileline"><span class="name" id="fname"></span><span><button class="recBtn">🎤 Record again</button> <button id="changeBtn">Change file</button></span></div>
         <div class="hint" id="fmeta"></div>
         <div id="wavewrap"><canvas id="wave"></canvas></div>
         <div class="hint">Click the waveform to choose which 20 seconds to preview.</div>
@@ -214,6 +220,42 @@ document.addEventListener("drop", async ev => {
   const r = await fetch("/api/upload", {method:"POST", body: fd}); if (!r.ok) return status((await r.json()).detail || "Couldn't read that file.", true);
   loaded(await r.json());
 });
+// ---- record from mic ----
+let rec = null, recChunks = [], recStream = null, recStart = 0, recTick = null, recKeep = true;
+document.querySelectorAll(".recBtn").forEach(b => b.onclick = startRec);
+async function startRec(){
+  stop();
+  try {   // raw mic: switch off the browser's own cleanup so Before is honest and our engine does the work
+    recStream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1}});
+  } catch (e) { return status("Microphone blocked. Allow it in the browser's address bar (🔒 › Microphone) and try again.", true); }
+  recChunks = []; recKeep = true;
+  rec = new MediaRecorder(recStream, {mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : ""});
+  rec.ondataavailable = e => e.data.size && recChunks.push(e.data);
+  rec.onstop = uploadRec;
+  rec.start(500); recStart = Date.now();
+  $("drop").style.display = "none"; $("fileinfo").style.display = "none"; $("recbox").style.display = "block";
+  status("Recording… press Stop when you're done (up to 10 minutes).");
+  const ctx = new AudioContext(), an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(recStream).connect(an);
+  const buf = new Uint8Array(an.fftSize), c = $("meter"), g = c.getContext("2d");
+  recTick = setInterval(() => {
+    const s = (Date.now() - recStart) / 1000; $("rectime").textContent = fmt(s); if (s > 600) $("stopRec").click();
+    an.getByteTimeDomainData(buf); let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v - 128) / 128);
+    c.width = c.clientWidth; c.height = 36; g.fillStyle = "#2a2f3a"; g.fillRect(0, 0, c.width, 36);
+    g.fillStyle = pk > 0.9 ? "#e5735c" : "#5ec2b7"; g.fillRect(0, 0, c.width * Math.min(1, pk * 1.4), 36);
+  }, 60);
+  rec.ctx = ctx;
+}
+function endRec(keep){ recKeep = keep; clearInterval(recTick); rec.stop(); recStream.getTracks().forEach(t => t.stop()); rec.ctx.close(); $("recbox").style.display = "none"; }
+$("stopRec").onclick = () => endRec(true);
+$("cancelRec").onclick = () => { endRec(false); if (file) $("fileinfo").style.display = "block"; else $("drop").style.display = "block"; status(file ? "Ready." : "Choose a file to begin."); };
+async function uploadRec(){
+  if (!recKeep || !recChunks.length) return;
+  const d = new Date(), name = `Mic recording ${d.getHours()}-${String(d.getMinutes()).padStart(2,"0")}-${String(d.getSeconds()).padStart(2,"0")}.webm`;
+  status("Loading your recording…", false, true); const fd = new FormData(); fd.append("f", new Blob(recChunks, {type: "audio/webm"}), name);
+  const r = await fetch("/api/upload", {method: "POST", body: fd});
+  if (!r.ok){ $("drop").style.display = "block"; return status((await r.json().catch(()=>({}))).detail || "Couldn't load the recording.", true); }
+  loaded(await r.json());
+}
 const fmt = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
 function drawWave(){
   const c = $("wave"), dpr = devicePixelRatio || 1, w = c.clientWidth, h = 110; c.width = w*dpr; c.height = h*dpr;

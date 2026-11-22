@@ -37,6 +37,10 @@ def file_info(path: str):
 def upload(f: UploadFile):
     d = engine.WORK / "uploads"; d.mkdir(exist_ok=True); p = d / Path(f.filename).name
     with open(p, "wb") as o: shutil.copyfileobj(f.file, o)
+    if p.suffix.lower() in (".webm", ".ogg", ".opus"):          # browser mic recordings carry no duration: turn them into WAV first
+        wav = p.with_suffix(".wav")
+        subprocess.run([engine.FF, "-y", "-v", "error", "-i", str(p), "-ac", "1", "-ar", str(engine.SR), str(wav)], check=True)
+        p.unlink(); p = wav
     return info(p)
 
 @app.get("/api/setup")
