@@ -10,6 +10,7 @@ FF = os.path.expanduser("~/.local/ffmpeg-bin/ffmpeg")
 ROOT = Path(__file__).parent
 WORK = ROOT / "work"; WORK.mkdir(exist_ok=True)
 SR = 48000
+VERSION = 2                      # bump when the sound changes, so cached previews are rebuilt
 
 PRESETS = {
     "Cinematic narration": dict(noise=70, clarity=55, warmth=65, echo=30, space=25, punch=60, loudness="Instagram / YouTube"),
@@ -56,23 +57,35 @@ def denoise(src, amount):
     return out
 
 def voice_chain(s, adv):
-    """Slider values → ffmpeg filters for the voice. adv = advanced overrides (may be empty)."""
+    """Slider values → ffmpeg filters for the voice (everything except the reverb). adv = advanced overrides (may be empty).
+    Ranges are deliberately wide enough to hear: 50 is neutral on warmth, the ends are clearly different."""
     f = [f"highpass=f={adv.get('highpass', 80)}:poles=2"]
     if s["echo"] > 0:                                          # downward expander: tails of room echo between words drop away
-        f.append(f"agate=threshold={0.002 + s['echo'] * 0.0003:.4f}:ratio={1.5 + s['echo'] * 0.03:.2f}:range={1 - s['echo'] * 0.008:.3f}:attack=5:release={250 - s['echo']:.0f}")
-    warm = (s["warmth"] - 50) / 50 * 5                         # −5 … +5 dB low shelf
-    f.append(f"bass=g={adv.get('low', warm):.1f}:f=180")
-    f.append(f"equalizer=f=400:t=q:w=1.2:g={adv.get('mid', -1.5 if s['clarity'] > 40 else 0):.1f}")   # tame boxiness
-    f.append(f"equalizer=f=3500:t=q:w=1:g={adv.get('presence', (s['clarity'] - 30) / 70 * 6):.1f}")   # presence: 0 … +6 dB
-    f.append(f"treble=g={adv.get('air', (s['clarity'] - 50) / 50 * 2):.1f}:f=10000")
-    if adv.get("deesser", s["clarity"] > 50): f.append("deesser=i=0.4:m=0.5:f=0.5")
-    ratio = 1.5 + s["punch"] / 100 * 3.5                        # compressor: gentle 1.5:1 → firm 5:1
-    f.append(f"acompressor=threshold={adv.get('comp_threshold', -18 - s['punch'] / 10):.0f}dB:ratio={adv.get('comp_ratio', ratio):.1f}:attack=8:release=180:makeup=2")
-    if s["space"] > 0:                                         # a small warm room, never a cathedral
-        d = s["space"] / 100
-        f.append(f"aecho=1.0:{0.7 + d * 0.2:.2f}:23|41|67|97:{0.25 * d:.3f}|{0.18 * d:.3f}|{0.12 * d:.3f}|{0.07 * d:.3f}")
+        f.append(f"agate=threshold={0.002 + s['echo'] * 0.0003:.4f}:ratio={1.5 + s['echo'] * 0.05:.2f}:range={max(0.05, 1 - s['echo'] * 0.0095):.3f}:attack=5:release={250 - s['echo']:.0f}")
+    w = (s["warmth"] - 50) / 50                                # −1 lighter … +1 deeper
+    f.append(f"bass=g={adv.get('low', w * 9):.1f}:f=200:w=0.8")                         # ±9 dB low shelf
+    f.append(f"equalizer=f=120:t=q:w=1:g={w * 3:.1f}")                                 # chest
+    f.append(f"treble=g={-w * 3:.1f}:f=6000")                                          # tilt the top the other way
+    c = s["clarity"] / 100                                      # 0 muffled … 1 crisp
+    f.append(f"equalizer=f=400:t=q:w=1.2:g={adv.get('mid', -1 - c * 4):.1f}")          # tame boxiness
+    f.append(f"equalizer=f=3200:t=q:w=0.9:g={adv.get('presence', -5 + c * 15):.1f}")   # presence −5 … +10 dB
+    f.append(f"treble=g={adv.get('air', -3 + c * 8):.1f}:f=9000")                      # air −3 … +5 dB
+    if adv.get("deesser", s["clarity"] > 55): f.append("deesser=i=0.5:m=0.5:f=0.5")
+    ratio = 1.5 + s["punch"] / 100 * 5.5                        # compressor: gentle 1.5:1 → firm 7:1
+    f.append(f"acompressor=threshold={adv.get('comp_threshold', -16 - s['punch'] / 5):.0f}dB:ratio={adv.get('comp_ratio', ratio):.1f}:attack=6:release=160:makeup=2")
     return ",".join(f)
 
+def impulse(space):
+    """A stereo room impulse response for afir: decaying filtered noise, 0.5 s (small room) … 2.2 s (hall). Cached per value."""
+    out = WORK / f"ir_{space}.wav"
+    if out.exists(): return out
+    d = 0.5 + space / 100 * 1.7; n = int(SR * d); t = np.arange(n) / SR
+    rng = np.random.default_rng(1)
+    ir = rng.standard_normal((n, 2)) * np.exp(-6.9 * t / d)[:, None]          # −60 dB at the end
+    F = np.fft.rfft(ir, axis=0); fr = np.fft.rfftfreq(n, 1 / SR)
+    F *= (1 / (1 + (fr / 5000) ** 2))[:, None]                                # darker tail, like a real room
+    ir = np.fft.irfft(F, n, axis=0); ir[: int(SR * 0.012)] = 0                # 12 ms pre-delay
+    sf.write(out, (ir / np.abs(ir).max() * 0.5).astype(np.float32), SR); return out
 def settings(p):
     s = dict(PRESETS["Cinematic narration"]); s.update({k: v for k, v in p.items() if k in s})
     return s
@@ -90,7 +103,13 @@ def render(path, p, start=None, length=None, out=None):
     for name, level, duck in [(p.get("music"), p.get("music_level", 40), p.get("duck", 60)), (p.get("ambience"), p.get("ambience_level", 30), 0)]:
         if name and Path(name).exists(): bedlist.append((Path(name), level, duck))
     nsc = sum(1 for b in bedlist if b[2] > 0)
-    graph = [f"[0:a]{voice_chain(s, adv)},aformat=channel_layouts=stereo" + (f",asplit={1 + nsc}[v]" + "".join(f"[sc{k}]" for k in range(nsc)) if nsc else "[v]")]
+    graph = [f"[0:a]{voice_chain(s, adv)},aformat=channel_layouts=stereo[dry]"]
+    if s["space"] > 0:                                          # real convolution reverb, mixed under the dry voice
+        inputs += ["-i", str(impulse(int(s["space"])))]; ir_idx = sum(1 for a in inputs if a == "-i") - 1
+        wet = 0.08 + s["space"] / 100 * 0.42
+        graph.append(f"[dry]asplit=2[d1][d2];[d2][{ir_idx}:a]afir=dry=10:wet=10,volume={wet:.2f}[wet];[d1][wet]amix=inputs=2:duration=first:normalize=0[vv]")
+    else: graph.append("[dry]anull[vv]")
+    graph.append("[vv]" + (f"asplit={1 + nsc}[v]" + "".join(f"[sc{k}]" for k in range(nsc)) if nsc else "anull[v]"))
     beds, k = [], 0
     total = length if length else dur
     for n, (bed, level, duck) in enumerate(bedlist):
@@ -106,7 +125,7 @@ def render(path, p, start=None, length=None, out=None):
     mix = f"[v]{''.join(beds)}amix=inputs={1 + len(beds)}:duration=first:normalize=0" if beds else "[v]anull"
     graph.append(f"{mix},loudnorm=I={target}:TP=-1.5:LRA=11,alimiter=limit=0.89[out]")
     if out is None:
-        out = WORK / f"pv_{key(path, json.dumps(p, sort_keys=True), start, length)}.wav"
+        out = WORK / f"pv_{key(VERSION, path, json.dumps(p, sort_keys=True), start, length)}.wav"
         if not out.exists(): run([FF, "-y", "-v", "error", *inputs, "-filter_complex", ";".join(graph), "-map", "[out]", "-ar", str(SR), str(out)])
         return out
     out = Path(out)
