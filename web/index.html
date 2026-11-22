@@ -79,6 +79,10 @@ footer{position:fixed;left:0;right:0;bottom:0;background:rgba(15,17,21,.96);bord
       <h2>2 · Start from a preset</h2>
       <div class="row" style="margin-bottom:12px"><button class="primary" id="autoBtn" disabled>✨ Auto: listen and set everything</button><span class="hint" id="autoNote">Best first step for any new recording.</span></div>
       <div class="chips" id="autoTags" style="margin-bottom:12px"></div>
+      <div class="hint" style="margin:4px 0 6px">🎙 Pro voice styles: industry-standard chains</div>
+      <div class="chips" id="styles"></div>
+      <div class="hint" id="styleAbout" style="min-height:18px;margin:6px 0 12px;color:#bfe7e1"></div>
+      <div class="hint" style="margin-bottom:6px">Quick presets</div>
       <div class="chips" id="presets"></div>
       <div class="chips" id="mine" style="margin-top:10px"></div>
     </div>
@@ -162,8 +166,8 @@ ctl.music_level = slider($("mlev"), "music_level", "Music volume", "", 0, 100, 1
 ctl.duck = slider($("mduck"), "duck", "Lower music when I speak", "Music dips under your voice and returns in pauses.", 0, 100, 1, 60, changed);
 ctl.ambience_level = slider($("alev"), "ambience_level", "Ambience volume", "", 0, 100, 1, 30, changed);
 const advCtl = {};
-ADV.forEach(([k,l,mn,mx,v]) => advCtl[k] = slider($("adv"), k, l, "", mn, mx, k==="comp_ratio"?0.5:1, v, () => { if ($("advOn").checked) schedule(); }));
-$("advOn").onchange = schedule; $("loudness").onchange = () => { p.loudness = $("loudness").value; schedule(); };
+ADV.forEach(([k,l,mn,mx,v]) => advCtl[k] = slider($("adv"), k, l, "", mn, mx, k==="comp_ratio"?0.5:1, v, () => { if ($("advOn").checked){ schedule(); lvUpdate(); } }));
+$("advOn").onchange = () => { schedule(); lvUpdate(); }; $("loudness").onchange = () => { p.loudness = $("loudness").value; schedule(); };
 
 function params(){
   const q = {...p, music: $("music").value || null, ambience: $("amb").value || null, loudness: $("loudness").value};
@@ -175,13 +179,16 @@ function apply(preset){
   if (preset.loudness) $("loudness").value = preset.loudness;
   if ("music" in preset) $("music").value = preset.music || "";
   if ("ambience" in preset) $("amb").value = preset.ambience || "";
-  p = {...p, ...preset}; delete p.music; delete p.ambience; delete p.advanced;
+  p = {...p, ...preset}; delete p.music; delete p.ambience; delete p.advanced; delete p.about;
+  if (!preset.style) delete p.style;
+  $("styleAbout").textContent = preset.style ? (S.styles[preset.style]?.about || "") + " Sliders at the middle = exactly this style." : "";
   if (preset.advanced){ $("advOn").checked = true; for (const k in preset.advanced) advCtl[k]?.set(preset.advanced[k]); } else $("advOn").checked = false;
   syncMusic(); schedule(); if (typeof lvUpdate === 'function') lvUpdate();
 }
 function markPreset(name){ current = name; document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.name === name)); }
 function drawPresets(){
-  $("presets").innerHTML = ""; $("mine").innerHTML = "";
+  $("presets").innerHTML = ""; $("mine").innerHTML = ""; $("styles").innerHTML = "";
+  for (const n in S.styles){ const b = document.createElement("button"); b.className="chip"; b.textContent=n; b.dataset.name=n; b.title=S.styles[n].about; b.onclick=()=>{apply(S.styles[n]); markPreset(n);}; $("styles").appendChild(b); }
   for (const n in S.presets){ const b = document.createElement("button"); b.className="chip"; b.textContent=n; b.dataset.name=n; b.onclick=()=>{apply(S.presets[n]); markPreset(n);}; $("presets").appendChild(b); }
   for (const n in S.mine){ const b = document.createElement("button"); b.className="chip"; b.dataset.name=n; b.innerHTML=`⭐ ${n}<span class="x" title="Delete">✕</span>`;
     b.onclick = e => { if (e.target.classList.contains("x")){ if (confirm(`Delete "${n}"?`)) fetch(`/api/preset/${encodeURIComponent(n)}`,{method:"DELETE"}).then(r=>r.json()).then(m=>{S.mine=m;drawPresets();}); return; } apply(S.mine[n]); markPreset(n); };
@@ -258,7 +265,7 @@ function audioGraph(){
 }
 function live(){
   if (!nodes || !rendered) return;
-  const dw = ((p.warmth ?? 50) - (rendered.warmth ?? 50)) / 50, dc = ((p.clarity ?? 50) - (rendered.clarity ?? 50)) / 100, ds = Math.max(0, (p.space ?? 0) - (rendered.space ?? 0)) / 100;
+  const st = !!p.style, dw = ((p.warmth ?? 50) - (rendered.warmth ?? 50)) / 50 * (st ? 0.67 : 1), dc = ((p.clarity ?? 50) - (rendered.clarity ?? 50)) / 100 * (st ? 0.8 : 1), ds = Math.max(0, (p.space ?? 0) - (rendered.space ?? 0)) / 100;
   const t = AC.currentTime;
   nodes.low.gain.setTargetAtTime(dw * 9, t, .03); nodes.chest.gain.setTargetAtTime(dw * 3, t, .03); nodes.tilt.gain.setTargetAtTime(-dw * 3, t, .03);
   nodes.pres.gain.setTargetAtTime(dc * 15, t, .03); nodes.air.gain.setTargetAtTime(dc * 8, t, .03); nodes.wet.gain.setTargetAtTime(ds * 0.35, t, .03);
@@ -277,7 +284,7 @@ async function lvDevices(){
   if (j.running) lvShow(true);
 }
 $("bhRefresh").onclick = e => { e.preventDefault(); lvDevices(); };
-function lvParams(){ const q = {...p}; delete q.loudness; return q; }
+function lvParams(){ const q = params(); delete q.loudness; delete q.music; delete q.ambience; return q; }
 function lvShow(on){
   LV.running = on; $("lvBtn").textContent = on ? "■ Stop clean mic" : "Start clean mic"; $("lvBtn").classList.toggle("primary", !on);
   $("lvMeters").style.display = on ? "block" : "none"; clearInterval(lvTimer);

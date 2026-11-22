@@ -10,7 +10,7 @@ FF = os.path.expanduser("~/.local/ffmpeg-bin/ffmpeg")
 ROOT = Path(__file__).parent
 WORK = ROOT / "work"; WORK.mkdir(exist_ok=True)
 SR = 48000
-VERSION = 2                      # bump when the sound changes, so cached previews are rebuilt
+VERSION = 5                      # bump when the sound changes, so cached previews are rebuilt
 
 PRESETS = {
     "Cinematic narration": dict(noise=70, clarity=55, warmth=65, echo=30, space=25, punch=60, loudness="Instagram / YouTube"),
@@ -19,7 +19,34 @@ PRESETS = {
     "Outdoor / noisy room": dict(noise=95, clarity=65, warmth=45, echo=20, space=0, punch=55, loudness="Instagram / YouTube"),
     "Natural (light touch)": dict(noise=35, clarity=40, warmth=50, echo=10, space=0, punch=30, loudness="Instagram / YouTube"),
 }
-LOUDNESS = {"Instagram / YouTube": -14, "Meeting / podcast": -16, "Film (quieter)": -20}
+LOUDNESS = {"Instagram / YouTube": -14, "Meeting / podcast": -16, "Audiobook (ACX)": -18, "Film (quieter)": -20, "TV broadcast (EBU R128)": -23}
+TRUE_PEAK = {"Audiobook (ACX)": -3.5}                     # ACX wants peaks under −3 dB; everything else −1.5 dBTP
+
+# Pro voice styles: the standard broadcast chain (low cut → cut mud → compress → de-ess → presence/air → loudness + peak limit),
+# tuned to how each kind of voice is usually delivered. Sliders sit at 50 = exactly the style, and move it from there.
+STYLES = {
+    "Radio presenter":   dict(hp=85, low_f=150, low=4,   chest=1.5, mud_f=300, mud=-3.5, pres_f=4000, pres=4,   air=3,   deess=0.6,  thr=-26, ratio=5,
+                              about="Close-mic broadcast sound: full low end, forward voice, tightly controlled level."),
+    "Podcast standard":  dict(hp=80, low_f=180, low=1.5, chest=0,   mud_f=300, mud=-3,   pres_f=3500, pres=3,   air=2,   deess=0.5,  thr=-22, ratio=3,
+                              about="The common podcast chain, delivered at −16 LUFS (Apple / Spotify spec)."),
+    "Audiobook (ACX-ready)": dict(hp=80, low_f=180, low=1, chest=0, mud_f=300, mud=-2,   pres_f=3000, pres=2,   air=1,   deess=0.45, thr=-20, ratio=2.2,
+                              about="Natural and even. Meets Audible ACX: −18 to −23 dB RMS, peaks under −3 dB, very quiet background."),
+    "YouTube creator":   dict(hp=90, low_f=160, low=2,   chest=0,   mud_f=350, mud=-3.5, pres_f=4500, pres=5,   air=4,   deess=0.65, thr=-24, ratio=4,
+                              about="Bright, upfront and punchy, at −14 LUFS for YouTube and Instagram."),
+    "Movie trailer (deep)": dict(hp=55, low_f=110, low=6, chest=2,   mud_f=400, mud=-4,   pres_f=3000, pres=2,   air=0,   deess=0.5,  thr=-28, ratio=6,
+                              about="Big, deep voice with heavy compression and a touch of room."),
+    "Storyteller (warm)": dict(hp=70, low_f=180, low=3,  chest=1,   mud_f=350, mud=-2.5, pres_f=3000, pres=2.5, air=1.5, deess=0.5,  thr=-22, ratio=3,
+                              about="Warm and intimate with a soft top and a small room, for narration and stories."),
+}
+STYLE_PRESETS = {
+    "Radio presenter":       dict(noise=80, echo=45, space=0,  loudness="Instagram / YouTube"),
+    "Podcast standard":      dict(noise=75, echo=40, space=0,  loudness="Meeting / podcast"),
+    "Audiobook (ACX-ready)": dict(noise=85, echo=55, space=0,  loudness="Audiobook (ACX)"),
+    "YouTube creator":       dict(noise=75, echo=35, space=0,  loudness="Instagram / YouTube"),
+    "Movie trailer (deep)":  dict(noise=80, echo=40, space=12, loudness="Instagram / YouTube"),
+    "Storyteller (warm)":    dict(noise=70, echo=30, space=18, loudness="Instagram / YouTube"),
+}
+for _n, _v in STYLE_PRESETS.items(): _v.update(style=_n, clarity=50, warmth=50, punch=50, about=STYLES[_n]["about"])
 
 def run(args): subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
@@ -62,24 +89,50 @@ def denoise(src, amount):
     save_audio(str(out), enhance(model, state, audio, atten_lim_db=lim), state.sr())
     return out
 
+def plan(s, adv):
+    """Slider values (+ optional pro style, + advanced overrides) → the voice EQ and compressor, shared by editing and meeting mode.
+    bands: (kind, freq, gain dB, q) with kind low/high shelf or peak."""
+    st = STYLES.get(s.get("style") or "")
+    if st:
+        w, c, pu = (s["warmth"] - 50) / 50, (s["clarity"] - 50) / 50, (s["punch"] - 50) / 50
+        bands = [["low", st["low_f"], st["low"] + w * 6, 0.8], ["peak", 120, st["chest"] + w * 2, 1], ["peak", st["mud_f"], st["mud"] - max(0, c) * 2, 1.2],
+                 ["peak", st["pres_f"], st["pres"] + c * 6, 0.9], ["high", 10000, st["air"] + c * 4, 0.7]]
+        out = dict(hp=st["hp"], deess=st["deess"] if s["clarity"] > 20 else 0, thr=st["thr"] - pu * 6, ratio=max(1.2, st["ratio"] * (1 + pu * 0.6)))
+        idx = dict(low=0, mid=2, presence=3, air=4)
+    else:                                                      # the original slider mapping. Ranges are wide enough to hear.
+        w, c = (s["warmth"] - 50) / 50, s["clarity"] / 100
+        bands = [["low", 200, w * 9, 0.8], ["peak", 120, w * 3, 1], ["high", 6000, -w * 3, 0.5], ["peak", 400, -1 - c * 4, 1.2],
+                 ["peak", 3200, -5 + c * 15, 0.9], ["high", 9000, -3 + c * 8, 0.5]]
+        out = dict(hp=80, deess=0.5 if s["clarity"] > 55 else 0, thr=-16 - s["punch"] / 5, ratio=1.5 + s["punch"] / 100 * 5.5)
+        idx = dict(low=0, mid=3, presence=4, air=5)
+    for k, i in idx.items():
+        if k in adv: bands[i][2] = adv[k]
+    out.update(hp=adv.get("highpass", out["hp"]), thr=adv.get("comp_threshold", out["thr"]), ratio=adv.get("comp_ratio", out["ratio"]), bands=bands)
+    if "deesser" in adv: out["deess"] = 0.5 if adv["deesser"] else 0
+    return out
+
 def voice_chain(s, adv):
-    """Slider values → ffmpeg filters for the voice (everything except the reverb). adv = advanced overrides (may be empty).
-    Ranges are deliberately wide enough to hear: 50 is neutral on warmth, the ends are clearly different."""
-    f = [f"highpass=f={adv.get('highpass', 80)}:poles=2"]
+    """Slider values → ffmpeg filters for the voice (everything except the reverb). adv = advanced overrides (may be empty)."""
+    pl = plan(s, adv)
+    f = [f"highpass=f={pl['hp']}:poles=2"]
     if s["echo"] > 0:                                          # downward expander: tails of room echo between words drop away
         f.append(f"agate=threshold={0.002 + s['echo'] * 0.0003:.4f}:ratio={1.5 + s['echo'] * 0.05:.2f}:range={max(0.05, 1 - s['echo'] * 0.0095):.3f}:attack=5:release={250 - s['echo']:.0f}")
-    w = (s["warmth"] - 50) / 50                                # −1 lighter … +1 deeper
-    f.append(f"bass=g={adv.get('low', w * 9):.1f}:f=200:w=0.8")                         # ±9 dB low shelf
-    f.append(f"equalizer=f=120:t=q:w=1:g={w * 3:.1f}")                                 # chest
-    f.append(f"treble=g={-w * 3:.1f}:f=6000")                                          # tilt the top the other way
-    c = s["clarity"] / 100                                      # 0 muffled … 1 crisp
-    f.append(f"equalizer=f=400:t=q:w=1.2:g={adv.get('mid', -1 - c * 4):.1f}")          # tame boxiness
-    f.append(f"equalizer=f=3200:t=q:w=0.9:g={adv.get('presence', -5 + c * 15):.1f}")   # presence −5 … +10 dB
-    f.append(f"treble=g={adv.get('air', -3 + c * 8):.1f}:f=9000")                      # air −3 … +5 dB
-    if adv.get("deesser", s["clarity"] > 55): f.append("deesser=i=0.5:m=0.5:f=0.5")
-    ratio = 1.5 + s["punch"] / 100 * 5.5                        # compressor: gentle 1.5:1 → firm 7:1
-    f.append(f"acompressor=threshold={adv.get('comp_threshold', -16 - s['punch'] / 5):.0f}dB:ratio={adv.get('comp_ratio', ratio):.1f}:attack=6:release=160:makeup=2")
+    for kind, fr, g, q in pl["bands"]:
+        f.append(f"bass=g={g:.1f}:f={fr}:w={q}" if kind == "low" else f"treble=g={g:.1f}:f={fr}:w={q}" if kind == "high" else f"equalizer=f={fr}:t=q:w={q}:g={g:.1f}")
+    f.append(f"acompressor=threshold={pl['thr']:.0f}dB:ratio={pl['ratio']:.1f}:attack=6:release=160:makeup=2")
+    if pl["deess"]:                                            # after the compressor, as in a broadcast chain. ffmpeg's deesser does
+        f.append(f"deesser=i={0.35 + pl['deess'] * 0.15:.3f}:m=0.5:f=0.5")   # nothing below i≈0.35 and dulls all the top above ≈0.5
     return ",".join(f)
+
+def speech_gain(path):
+    """dB that brings the speech to −20 dBFS before the chain, so compressor thresholds mean the same on every recording."""
+    a, _ = sf.read(str(path), dtype="float32")
+    if a.ndim > 1: a = a.mean(1)
+    fr = SR // 50; n = len(a) // fr
+    if n < 10: return 0.0
+    e = np.sqrt((a[: n * fr].reshape(n, fr) ** 2).mean(1)) + 1e-9
+    loud = e[e >= np.percentile(e, 70)]
+    return float(np.clip(-20 - 20 * np.log10(np.sqrt((loud ** 2).mean())), -24, 24))
 
 def impulse(space):
     """A stereo room impulse response for afir: decaying filtered noise, 0.5 s (small room) … 2.2 s (hall). Cached per value."""
@@ -94,6 +147,7 @@ def impulse(space):
     sf.write(out, (ir / np.abs(ir).max() * 0.5).astype(np.float32), SR); return out
 def settings(p):
     s = dict(PRESETS["Cinematic narration"]); s.update({k: v for k, v in p.items() if k in s})
+    s["style"] = p.get("style") if p.get("style") in STYLES else None
     return s
 
 def render(path, p, start=None, length=None, out=None):
@@ -101,7 +155,7 @@ def render(path, p, start=None, length=None, out=None):
     Returns the WAV path (preview) or the exported file path."""
     s = settings(p); adv = p.get("advanced") or {}
     src = extract(path); clean = denoise(src, int(s["noise"]))
-    target = adv.get("lufs", LOUDNESS.get(s["loudness"], -14))
+    target = adv.get("lufs", LOUDNESS.get(s["loudness"], -14)); tp = TRUE_PEAK.get(s["loudness"], -1.5)
     dur, has_video = probe(path)
     win = ["-ss", f"{start:.2f}", "-t", f"{length:.2f}"] if start is not None else []
     inputs = [*win, "-i", str(clean)]
@@ -109,7 +163,7 @@ def render(path, p, start=None, length=None, out=None):
     for name, level, duck in [(p.get("music"), p.get("music_level", 40), p.get("duck", 60)), (p.get("ambience"), p.get("ambience_level", 30), 0)]:
         if name and Path(name).exists(): bedlist.append((Path(name), level, duck))
     nsc = sum(1 for b in bedlist if b[2] > 0)
-    graph = [f"[0:a]{voice_chain(s, adv)},aformat=channel_layouts=stereo[dry]"]
+    graph = [f"[0:a]volume={speech_gain(clean):.1f}dB,{voice_chain(s, adv)},aformat=channel_layouts=stereo[dry]"]
     if s["space"] > 0:                                          # real convolution reverb, mixed under the dry voice
         inputs += ["-i", str(impulse(int(s["space"])))]; ir_idx = sum(1 for a in inputs if a == "-i") - 1
         wet = 0.08 + s["space"] / 100 * 0.42
@@ -129,7 +183,7 @@ def render(path, p, start=None, length=None, out=None):
         else: graph.append(f"{chain}[b{n}]")
         beds.append(f"[b{n}]")
     mix = f"[v]{''.join(beds)}amix=inputs={1 + len(beds)}:duration=first:normalize=0" if beds else "[v]anull"
-    graph.append(f"{mix},loudnorm=I={target}:TP=-1.5:LRA=11,alimiter=limit=0.89[out]")
+    graph.append(f"{mix},loudnorm=I={target}:TP={tp}:LRA=11,alimiter=limit={10 ** ((tp + 0.5) / 20):.3f}:level=disabled[out]")
     if out is None:
         out = WORK / f"pv_{key(VERSION, path, json.dumps(p, sort_keys=True), start, length)}.wav"
         if not out.exists(): run([FF, "-y", "-v", "error", *inputs, "-filter_complex", ";".join(graph), "-map", "[out]", "-ar", str(SR), str(out)])

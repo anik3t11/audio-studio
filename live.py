@@ -35,13 +35,14 @@ class Live:
         return out
 
     def set_params(self, p):
+        from engine import plan, STYLES
         s = {"noise": 85, "clarity": 60, "warmth": 50, "echo": 40, "punch": 45, **{k: v for k, v in p.items() if isinstance(v, (int, float))}}
-        w, c = (s["warmth"] - 50) / 50, s["clarity"] / 100        # same mapping as the editing engine
-        sos = np.array([biquad("hp", 80), biquad("low", 200, w * 9, 0.8), biquad("peak", 120, w * 3, 1), biquad("high", 6000, -w * 3),
-                        biquad("peak", 400, -1 - c * 4, 1.2), biquad("peak", 3200, -5 + c * 15, 0.9), biquad("high", 9000, -3 + c * 8)])
+        s["style"] = p.get("style") if p.get("style") in STYLES else None
+        pl = plan(s, p.get("advanced") or {})                      # the same EQ + compressor as the editing engine
+        sos = np.array([biquad("hp", pl["hp"])] + [biquad(k, f, g, q) for k, f, g, q in pl["bands"]])
         with self.lock:
             if getattr(self, "sos", None) is None or self.sos.shape != sos.shape: self.zi = np.zeros((sos.shape[0], 2))
-            self.sos, self.s = sos, s
+            self.sos, self.s, self.comp = sos, s, (pl["thr"], pl["ratio"])
 
     def start(self, mic, out, monitor=None, params=None):
         self.stop()
@@ -98,7 +99,7 @@ class Live:
     def _dynamics(self, y, s):
         """Per 1 ms: echo gate, compressor and a slow auto-level, then a soft limiter."""
         fr = y.reshape(-1, 48); rms = np.sqrt((fr ** 2).mean(1)) + 1e-7; g = np.empty(len(rms), np.float32)
-        thr_gate = 10 ** ((-58 + s["echo"] * 0.25) / 20); thr = 10 ** ((-16 - s["punch"] / 5) / 20); ratio = 1.5 + s["punch"] / 100 * 5.5
+        thr_gate = 10 ** ((-58 + s["echo"] * 0.25) / 20); thr = 10 ** (self.comp[0] / 20); ratio = self.comp[1]
         for i, r in enumerate(rms):
             self.env = max(r, self.env * 0.97)                       # fast attack, ~30 ms release
             tg = 1.0 if self.env > thr_gate else max(0.1, 1 - s["echo"] / 110)

@@ -49,7 +49,7 @@ def setup():
     lib = {k: [{"name": p.stem, "path": str(p)} for p in sorted((LIB / k).glob("*")) if p.suffix.lower() in (".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg")]
            for k in ("Music", "Ambience", "My sounds")}
     mine = json.loads(MINE.read_text()) if MINE.exists() else {}
-    return {"presets": engine.PRESETS, "mine": mine, "loudness": list(engine.LOUDNESS), "library": lib}
+    return {"presets": engine.PRESETS, "styles": engine.STYLE_PRESETS, "mine": mine, "loudness": list(engine.LOUDNESS), "library": lib}
 
 class Job(BaseModel):
     path: str
