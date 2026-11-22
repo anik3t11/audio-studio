@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Studio</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--line:#2a2f3a;--text:#e9e6df;--dim:#9aa0ab;--acc:#f0b54a;--acc2:#5ec2b7;--bad:#e5735c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid var(--line)}
+header h1{font-size:18px;margin:0;font-weight:650;letter-spacing:.2px}
+header .tag{color:var(--dim);font-size:13px}
+main{display:grid;grid-template-columns:1fr 360px;gap:18px;padding:18px 22px 110px;max-width:1280px;margin:auto}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);margin:0 0 12px;font-weight:600}
+button{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer}
+button:hover{border-color:#3d4452}
+button.primary{background:var(--acc);color:#1b1407;border-color:var(--acc);font-weight:650}
+button.primary:disabled{opacity:.45;cursor:default}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:34px;text-align:center;color:var(--dim)}
+#drop.over{border-color:var(--acc);color:var(--text)}
+#drop b{color:var(--text)}
+#wavewrap{position:relative;height:110px;margin-top:6px;cursor:pointer;display:none}
+#wave{width:100%;height:110px;display:block}
+.fileline{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+.fileline .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hint{color:var(--dim);font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border-radius:999px;padding:7px 13px;font-size:14px}
+.chip.on{background:var(--acc);color:#1b1407;border-color:var(--acc);font-weight:600}
+.chip .x{margin-left:6px;opacity:.6}
+.slider{margin:14px 0 4px}
+.slider .top{display:flex;justify-content:space-between;align-items:baseline}
+.slider label{font-weight:600}
+.slider .val{color:var(--acc);font-variant-numeric:tabular-nums;font-size:14px}
+.slider .what{color:var(--dim);font-size:12.5px;margin:1px 0 6px}
+input[type=range]{width:100%;accent-color:var(--acc)}
+select{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
+.row{display:flex;gap:8px;align-items:center}
+.row select{flex:1}
+details{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+summary{cursor:pointer;color:var(--dim);font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px}
+footer{position:fixed;left:0;right:0;bottom:0;background:rgba(15,17,21,.96);border-top:1px solid var(--line);padding:12px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;z-index:5}
+.ab{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.ab button{border:0;border-radius:0;padding:10px 16px}
+.ab button.on{background:var(--acc2);color:#07211e;font-weight:650}
+#play{width:46px;height:42px;font-size:18px;padding:0}
+#status{color:var(--dim);font-size:14px;flex:1;min-width:180px}
+#status.err{color:var(--bad)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--dim);border-top-color:transparent;border-radius:50%;animation:s 0.8s linear infinite;margin-right:6px;vertical-align:-1px}
+@keyframes s{to{transform:rotate(360deg)}}
+.muted{opacity:.45;pointer-events:none}
+</style>
+</head>
+<body>
+<header><h1>🎙️ Audio Studio</h1><span class="tag">Clean your voice, add mood, export. Runs offline on this Mac.</span></header>
+<main>
+  <section style="display:flex;flex-direction:column;gap:18px">
+    <div class="card">
+      <h2>1 · Your file</h2>
+      <div id="drop"><b>Drop a video or audio file here</b><br>or <button id="openBtn" style="margin-top:10px">Choose file…</button></div>
+      <div id="fileinfo" style="display:none">
+        <div class="fileline"><span class="name" id="fname"></span><button id="changeBtn">Change file</button></div>
+        <div class="hint" id="fmeta"></div>
+        <div id="wavewrap"><canvas id="wave"></canvas></div>
+        <div class="hint">Click the waveform to choose which 20 seconds to preview.</div>
+      </div>
+    </div>
+    <div class="card" id="presetCard">
+      <h2>2 · Start from a preset</h2>
+      <div class="chips" id="presets"></div>
+      <div class="chips" id="mine" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="voiceCard">
+      <h2>3 · Fine-tune your voice</h2>
+      <div id="sliders"></div>
+      <details>
+        <summary>Advanced controls</summary>
+        <div class="slider"><div class="top"><label>Loudness target</label></div><div class="what">Where the video will be played.</div><select id="loudness"></select></div>
+        <div class="grid2" id="adv"></div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="advOn"> Use these advanced values (otherwise the sliders above decide)</label>
+      </details>
+    </div>
+  </section>
+  <aside style="display:flex;flex-direction:column;gap:18px">
+    <div class="card" id="bgCard">
+      <h2>4 · Background sound</h2>
+      <div class="slider"><div class="top"><label>Music</label></div>
+        <div class="row"><select id="music"></select><button id="pm" title="Listen">▶</button></div></div>
+      <div id="musicCtl">
+        <div id="mlev"></div><div id="mduck"></div>
+      </div>
+      <div class="slider" style="margin-top:18px"><div class="top"><label>Ambience</label></div>
+        <div class="row"><select id="amb"></select><button id="pa" title="Listen">▶</button></div></div>
+      <div id="alev"></div>
+      <p class="hint" style="margin-top:14px">Add your own music: <a href="#" id="mySounds" style="color:var(--acc)">open the "My sounds" folder</a>, drop files in, then reload this page.</p>
+    </div>
+    <div class="card">
+      <h2>5 · Save your settings</h2>
+      <div class="row"><input id="pname" placeholder="Name, e.g. Kahanikaar voice" style="flex:1;font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px"><button id="savePreset">Save</button></div>
+      <p class="hint">Saved settings appear as presets, ready for next time.</p>
+    </div>
+  </aside>
+</main>
+<footer>
+  <button id="play" disabled>▶</button>
+  <div class="ab"><button id="bBefore">Before</button><button id="bAfter" class="on">After</button></div>
+  <span id="status">Choose a file to begin.</span>
+  <select id="fmt" style="width:auto"><option value="same">Export as: same type</option><option value="mp4">Video (MP4)</option><option value="wav">Audio WAV (best quality)</option><option value="mp3">Audio MP3</option><option value="m4a">Audio M4A</option></select>
+  <button class="primary" id="exportBtn" disabled>Export</button>
+</footer>
+<audio id="aBefore" preload="auto"></audio><audio id="aAfter" preload="auto"></audio><audio id="aLib"></audio>
+<script>
+const $ = id => document.getElementById(id);
+const SL = [
+  ["noise","Noise removal","Fans, AC, traffic, hiss. Higher removes more; too high can sound thin."],
+  ["clarity","Voice clarity","Makes words crisp and easy to follow."],
+  ["warmth","Warmth","Left: lighter voice. Right: deeper, richer voice."],
+  ["echo","Echo reduction","Cuts the 'empty room' sound between words."],
+  ["space","Cinematic space","Adds a small warm room around the voice. Keep low for meetings."],
+  ["punch","Evenness","Evens out loud and soft words so nothing is lost."],
+];
+const ADV = [["highpass","Low cut (Hz)",40,200,80],["low","Bass (dB)",-8,8,0],["mid","Boxiness (dB)",-8,4,-1.5],["presence","Presence (dB)",-4,10,3],["air","Air (dB)",-4,6,0],["comp_threshold","Compressor threshold (dB)",-40,-6,-22],["comp_ratio","Compressor ratio",1,8,3]];
+let S = {presets:{}, mine:{}, library:{}}, file = null, p = {}, start = 0, which = "after", timer = null, busy = false, current = null;
+
+function slider(host, key, label, what, min=0, max=100, step=1, val=50, onchange){
+  const d = document.createElement("div"); d.className = "slider";
+  d.innerHTML = `<div class="top"><label>${label}</label><span class="val"></span></div>${what?`<div class="what">${what}</div>`:""}<input type="range" min="${min}" max="${max}" step="${step}">`;
+  const r = d.querySelector("input"), v = d.querySelector(".val");
+  r.value = val; v.textContent = val; r.dataset.key = key;
+  r.oninput = () => { v.textContent = r.value; onchange(key, +r.value); };
+  d.set = x => { r.value = x; v.textContent = x; };
+  host.appendChild(d); return d;
+}
+const ctl = {};
+function changed(k, v){ p[k] = v; markPreset(null); schedule(); }
+SL.forEach(([k,l,w]) => ctl[k] = slider($("sliders"), k, l, w, 0, 100, 1, 50, changed));
+ctl.music_level = slider($("mlev"), "music_level", "Music volume", "", 0, 100, 1, 40, changed);
+ctl.duck = slider($("mduck"), "duck", "Lower music when I speak", "Music dips under your voice and returns in pauses.", 0, 100, 1, 60, changed);
+ctl.ambience_level = slider($("alev"), "ambience_level", "Ambience volume", "", 0, 100, 1, 30, changed);
+const advCtl = {};
+ADV.forEach(([k,l,mn,mx,v]) => advCtl[k] = slider($("adv"), k, l, "", mn, mx, k==="comp_ratio"?0.5:1, v, () => { if ($("advOn").checked) schedule(); }));
+$("advOn").onchange = schedule; $("loudness").onchange = () => { p.loudness = $("loudness").value; schedule(); };
+
+function params(){
+  const q = {...p, music: $("music").value || null, ambience: $("amb").value || null, loudness: $("loudness").value};
+  if ($("advOn").checked){ q.advanced = {}; for (const k in advCtl) q.advanced[k] = +advCtl[k].querySelector("input").value; }
+  return q;
+}
+function apply(preset){
+  for (const k in preset){ if (ctl[k]) ctl[k].set(preset[k]); }
+  if (preset.loudness) $("loudness").value = preset.loudness;
+  if ("music" in preset) $("music").value = preset.music || "";
+  if ("ambience" in preset) $("amb").value = preset.ambience || "";
+  p = {...p, ...preset}; delete p.music; delete p.ambience; delete p.advanced;
+  if (preset.advanced){ $("advOn").checked = true; for (const k in preset.advanced) advCtl[k]?.set(preset.advanced[k]); } else $("advOn").checked = false;
+  syncMusic(); schedule();
+}
+function markPreset(name){ current = name; document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.name === name)); }
+function drawPresets(){
+  $("presets").innerHTML = ""; $("mine").innerHTML = "";
+  for (const n in S.presets){ const b = document.createElement("button"); b.className="chip"; b.textContent=n; b.dataset.name=n; b.onclick=()=>{apply(S.presets[n]); markPreset(n);}; $("presets").appendChild(b); }
+  for (const n in S.mine){ const b = document.createElement("button"); b.className="chip"; b.dataset.name=n; b.innerHTML=`⭐ ${n}<span class="x" title="Delete">✕</span>`;
+    b.onclick = e => { if (e.target.classList.contains("x")){ if (confirm(`Delete "${n}"?`)) fetch(`/api/preset/${encodeURIComponent(n)}`,{method:"DELETE"}).then(r=>r.json()).then(m=>{S.mine=m;drawPresets();}); return; } apply(S.mine[n]); markPreset(n); };
+    $("mine").appendChild(b); }
+  markPreset(current);
+}
+function fillSelect(sel, groups, none){
+  sel.innerHTML = `<option value="">${none}</option>`;
+  for (const [g, list] of groups){ if (!list.length) continue; const og = document.createElement("optgroup"); og.label = g;
+    list.forEach(s => { const o = document.createElement("option"); o.value = s.path; o.textContent = s.name; og.appendChild(o); }); sel.appendChild(og); }
+}
+function syncMusic(){ $("musicCtl").classList.toggle("muted", !$("music").value); $("alev").classList.toggle("muted", !$("amb").value); }
+$("music").onchange = $("amb").onchange = () => { markPreset(null); syncMusic(); schedule(); };
+function libPlay(btn, sel){
+  const a = $("aLib");
+  if (!a.paused && a.dataset.src === sel.value){ a.pause(); btn.textContent = "▶"; return; }
+  if (!sel.value) return; a.src = "/api/sound?path=" + encodeURIComponent(sel.value); a.dataset.src = sel.value; a.volume = 0.6; a.play();
+  $("pm").textContent = $("pa").textContent = "▶"; btn.textContent = "⏸"; a.onended = () => btn.textContent = "▶";
+}
+$("pm").onclick = () => libPlay($("pm"), $("music")); $("pa").onclick = () => libPlay($("pa"), $("amb"));
+$("mySounds").onclick = e => { e.preventDefault(); fetch("/api/open-my-sounds",{method:"POST"}); };
+
+fetch("/api/setup").then(r => r.json()).then(s => {
+  S = s; $("loudness").innerHTML = s.loudness.map(l => `<option>${l}</option>`).join("");
+  fillSelect($("music"), [["Built-in music", s.library.Music], ["My sounds", s.library["My sounds"]]], "No music");
+  fillSelect($("amb"), [["Built-in ambience", s.library.Ambience], ["My sounds", s.library["My sounds"]]], "No ambience");
+  drawPresets(); apply(s.presets["Cinematic narration"]); markPreset("Cinematic narration");
+  const f = new URLSearchParams(location.search).get("file");
+  if (f) fetch("/api/info?path=" + encodeURIComponent(f)).then(r => r.ok ? r.json() : null).then(loaded);
+});
+
+// ---- file ----
+function status(t, err=false, spin=false){ $("status").innerHTML = (spin?'<span class="spin"></span>':'') + t; $("status").classList.toggle("err", err); }
+function loaded(info){
+  if (!info || info.cancelled) return;
+  file = info; start = 0;
+  $("drop").style.display = "none"; $("fileinfo").style.display = "block"; $("wavewrap").style.display = "block";
+  $("fname").textContent = info.name;
+  $("fmeta").textContent = `${fmt(info.duration)} · ${info.video ? "video (picture is kept as it is)" : "audio"}`;
+  drawWave(); $("exportBtn").disabled = false; $("play").disabled = false; schedule(0);
+}
+async function openDialog(){ status("Waiting for you to pick a file…", false, true); const r = await fetch("/api/open",{method:"POST"}); if (!r.ok) return status((await r.json()).detail || "Couldn't open that file.", true); const j = await r.json(); if (j.cancelled) return status(file ? "Ready." : "Choose a file to begin."); loaded(j); }
+$("openBtn").onclick = $("changeBtn").onclick = openDialog;
+const drop = $("drop");
+["dragenter","dragover"].forEach(e => document.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(e => document.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("over"); }));
+document.addEventListener("drop", async ev => {
+  const f = ev.dataTransfer.files[0]; if (!f) return;
+  status(`Loading ${f.name}…`, false, true); const fd = new FormData(); fd.append("f", f);
+  const r = await fetch("/api/upload", {method:"POST", body: fd}); if (!r.ok) return status((await r.json()).detail || "Couldn't read that file.", true);
+  loaded(await r.json());
+});
+const fmt = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
+function drawWave(){
+  const c = $("wave"), dpr = devicePixelRatio || 1, w = c.clientWidth, h = 110; c.width = w*dpr; c.height = h*dpr;
+  const g = c.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0,0,w,h);
+  const pk = file.peaks, n = pk.length, x0 = start / file.duration * w, x1 = Math.min(start + 20, file.duration) / file.duration * w;
+  g.fillStyle = "rgba(240,181,74,.12)"; g.fillRect(x0, 0, x1 - x0, h);
+  for (let i = 0; i < n; i++){ const x = i / n * w, y = Math.max(1, pk[i] * (h/2 - 6)); const inWin = x >= x0 && x <= x1;
+    g.fillStyle = inWin ? "#f0b54a" : "#4a5160"; g.fillRect(x, h/2 - y, Math.max(1, w/n - .4), y*2); }
+  const a = cur(); if (a && a.src && !a.paused || a && a.currentTime > 0){ const px = (start + a.currentTime) / file.duration * w; g.fillStyle = "#fff"; g.fillRect(px, 0, 2, h); }
+}
+$("wavewrap").onclick = e => { if (!file) return; const r = $("wave").getBoundingClientRect(); start = Math.max(0, Math.min(file.duration - 20, (e.clientX - r.left) / r.width * file.duration - 10)); if (file.duration < 20) start = 0; stop(); drawWave(); schedule(0); };
+addEventListener("resize", () => file && drawWave());
+
+// ---- preview ----
+function schedule(ms = 450){ if (!file) return; clearTimeout(timer); timer = setTimeout(previewNow, ms); }
+let seq = 0;
+async function previewNow(){
+  const my = ++seq; const wasPlaying = !cur().paused; const pos = cur().currentTime;
+  status("Updating preview…", false, true);
+  const r = await fetch("/api/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path: file.path, params: params(), start, length: Math.min(20, file.duration)})});
+  if (my !== seq) return;
+  if (!r.ok){ const j = await r.json().catch(()=>({})); return status("Preview failed: " + (j.detail || r.status), true); }
+  const j = await r.json(); stop();
+  $("aBefore").src = j.before; $("aAfter").src = j.after;
+  status(`Ready · previewing ${fmt(start)}–${fmt(start + Math.min(20, file.duration))}. Press ▶, and switch Before / After while it plays.`);
+  if (wasPlaying){ for (const a of [$("aBefore"), $("aAfter")]) a.currentTime = pos; play(); }
+}
+const cur = () => which === "after" ? $("aAfter") : $("aBefore");
+const other = () => which === "after" ? $("aBefore") : $("aAfter");
+let raf;
+function play(){ const a = cur(), o = other(); o.pause(); o.currentTime = a.currentTime; a.play(); $("play").textContent = "⏸"; cancelAnimationFrame(raf); const tick = () => { drawWave(); if (!a.paused) raf = requestAnimationFrame(tick); else $("play").textContent = "▶"; }; tick(); }
+function stop(){ $("aBefore").pause(); $("aAfter").pause(); $("play").textContent = "▶"; }
+$("play").onclick = () => { if (!cur().src) return; cur().paused ? play() : stop(); };
+function setWhich(w){ const playing = !cur().paused, t = cur().currentTime; which = w; $("bBefore").classList.toggle("on", w === "before"); $("bAfter").classList.toggle("on", w === "after"); other().pause(); cur().currentTime = t; if (playing) play(); }
+$("bBefore").onclick = () => setWhich("before"); $("bAfter").onclick = () => setWhich("after");
+addEventListener("keydown", e => { if (e.target.tagName === "INPUT" && e.target.type !== "range") return; if (e.code === "Space"){ e.preventDefault(); $("play").click(); } if (e.key === "b" || e.key === "B") setWhich(which === "after" ? "before" : "after"); });
+
+// ---- export & presets ----
+$("exportBtn").onclick = async () => {
+  if (busy) return; busy = true; $("exportBtn").disabled = true; status(`Exporting the full ${fmt(file.duration)}… this takes a few seconds per minute.`, false, true);
+  const r = await fetch("/api/export", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path: file.path, params: params(), fmt: $("fmt").value})});
+  busy = false; $("exportBtn").disabled = false;
+  if (!r.ok){ const j = await r.json().catch(()=>({})); return status("Export failed: " + (j.detail || r.status), true); }
+  const j = await r.json();
+  $("status").innerHTML = `✅ Saved <b>${j.name}</b> in Desktop › Audio Studio Exports · <a href="#" id="rev" style="color:var(--acc)">Show in Finder</a>`; $("status").classList.remove("err");
+  $("rev").onclick = e => { e.preventDefault(); fetch("/api/reveal", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path: j.out})}); };
+};
+$("savePreset").onclick = async () => {
+  const name = $("pname").value.trim(); if (!name) return $("pname").focus();
+  const r = await fetch("/api/preset", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({name, params: params()})});
+  S.mine = await r.json(); current = name; drawPresets(); $("pname").value = ""; status(`Saved "${name}" as a preset.`);
+};
+</script>
+</body>
+</html>

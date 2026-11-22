@@ -1,0 +1,6 @@
+work/
+.venv/
+library/My sounds/*
+!library/My sounds/.keep
+my_presets.json
+test/
