@@ -1,0 +1,11 @@
+deepfilternet==0.5.6
+torch==2.2.2
+torchaudio==2.2.2
+numpy==1.26.4
+fastapi==0.165.0
+uvicorn==0.54.0
+pydantic==2.14.4
+python-multipart==0.0.34
+sounddevice==0.5.6
+soundfile==0.14.0
+rumps==0.4.0
